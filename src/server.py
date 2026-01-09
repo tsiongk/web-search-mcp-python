@@ -18,4 +18,4 @@ server = MCPServer(
 
 async def main() -> None:
     server.collect(*web_search_tools)
-    await server.serve(port=3013)
+    await server.serve(port=8080)
