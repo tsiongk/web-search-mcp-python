@@ -3,16 +3,15 @@
 
 """Web Search operations for MCP server.
 
-No API key required - uses DuckDuckGo search.
+No API key required - uses DuckDuckGo search via HTML endpoint.
+Mirrors the original TypeScript implementation's approach.
 """
 
-import asyncio
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote
 
 import httpx
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 from pydantic import BaseModel
 
 from dedalus_mcp import tool
@@ -32,8 +31,35 @@ class WebSearchResult(BaseModel):
 # --- Helper ------------------------------------------------------------------
 
 
+def _clean_duckduckgo_url(url: str) -> str:
+    """Clean DuckDuckGo redirect URLs to get actual URLs.
+    
+    DuckDuckGo returns URLs like //duckduckgo.com/l/?uddg=ENCODED_URL
+    This extracts and decodes the actual URL.
+    """
+    if url.startswith("//duckduckgo.com/l/"):
+        try:
+            # Extract the uddg parameter which contains the actual URL
+            if "?" in url:
+                query_string = url.split("?", 1)[1]
+                params = parse_qs(query_string)
+                if "uddg" in params:
+                    return unquote(params["uddg"][0])
+        except Exception:
+            pass
+    
+    # Handle protocol-relative URLs
+    if url.startswith("//"):
+        return "https:" + url
+    
+    return url
+
+
 async def _search_web(query: str, num_results: int = 5) -> list[dict[str, str]]:
-    """Search the web using DuckDuckGo.
+    """Search the web using DuckDuckGo HTML endpoint.
+    
+    This mirrors the TypeScript implementation's approach of making
+    a direct HTTP request to DuckDuckGo's HTML search endpoint.
 
     Args:
         query: Search query
@@ -42,24 +68,68 @@ async def _search_web(query: str, num_results: int = 5) -> list[dict[str, str]]:
     Returns:
         List of search results with title, url, description
     """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    
     try:
-        # Run sync DuckDuckGo search in thread pool
-        loop = asyncio.get_event_loop()
-        results = await loop.run_in_executor(
-            None,
-            lambda: list(DDGS().text(query, max_results=num_results)),
-        )
-        
-        return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "description": r.get("body", ""),
-            }
-            for r in results
-        ]
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # Use DuckDuckGo's HTML search endpoint (same as TypeScript version)
+            response = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers=headers,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            
+            # Parse the HTML response
+            soup = BeautifulSoup(response.text, "html.parser")
+            results = []
+            
+            # DuckDuckGo results are in .result elements (same selectors as TypeScript)
+            for result_elem in soup.select(".result"):
+                if len(results) >= num_results:
+                    break
+                
+                # Extract title and URL from .result__title a
+                title_elem = result_elem.select_one(".result__title a")
+                if not title_elem:
+                    continue
+                    
+                title = title_elem.get_text(strip=True)
+                url = title_elem.get("href", "")
+                
+                if not title or not url:
+                    continue
+                
+                # Clean the URL (DuckDuckGo uses redirect URLs)
+                url = _clean_duckduckgo_url(url)
+                
+                # Skip ad URLs
+                if "/y.js" in url or "ad_domain" in url:
+                    continue
+                
+                # Extract snippet from .result__snippet
+                snippet_elem = result_elem.select_one(".result__snippet")
+                description = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                
+                results.append({
+                    "title": title,
+                    "url": url,
+                    "description": description,
+                })
+            
+            return results
+            
     except Exception as e:
-        raise Exception(f"Search failed: {e}")
+        raise Exception(f"DuckDuckGo search failed: {e}")
 
 
 async def _extract_content(url: str, max_length: int | None = None) -> dict[str, Any]:
