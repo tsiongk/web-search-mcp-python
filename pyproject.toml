@@ -1,0 +1,34 @@
+# --- BUILD SYSTEM ---
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+# --- PROJECT CONFIGURATION ---
+
+[project]
+name = "web-search-mcp"
+version = "0.1.0"
+description = "Web Search MCP server for Dedalus."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["ai", "mcp", "agents", "dedalus", "web-search"]
+
+dependencies = [
+    "dedalus-mcp>=0.4.1",
+    "httpx>=0.28.0",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+    "beautifulsoup4>=4.12.0",
+    "duckduckgo-search>=7.0.0",
+    "uvloop>=0.22.1; platform_system != 'Windows'",
+]
+
+# --- UV CONFIGURATION ---
+
+[tool.uv]
+preview = true
+package = false
+cache-dir = ".cache/uv"
+compile-bytecode = true
